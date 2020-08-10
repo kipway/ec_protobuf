@@ -2,7 +2,7 @@
 \file ec_protobuf.h
 \author	jiangyong
 \email  kipway@outlook.com
-\update 2020.8.7
+\update 2020.8.10
 
 eclib class base_protobuf ,parse google protocol buffer
 
@@ -61,23 +61,26 @@ namespace ec
 			return ua.u8 == 0x01;
 		}
 
-		template<class _Tp>
-		struct t_zigzag {
-			using tpu = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
-			using tpi = typename std::conditional < sizeof(_Tp) < 8u, int32_t, int64_t > ::type;
-			inline tpu  encode(tpi v) const {
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
+			struct t_zigzag {
+			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+			using itype = typename std::conditional < sizeof(_Tp) < 8u, int32_t, int64_t > ::type;
+			inline utype  encode(itype v) const {
 				return ((v << 1) ^ (v >> (sizeof(_Tp) < 8u ? 31 : 63)));
 			}
 
-			inline  tpi decode(tpu v) const {
-				return (tpi)((v >> 1) ^ (-(tpi)(v & 1)));
+			inline  itype decode(utype v) const {
+				return (itype)((v >> 1) ^ (-(itype)(v & 1)));
 			}
 		};
 
-		template<class _Tp>
-		bool get_varint(const uint8_t* &pd, int &len, _Tp &out) const  //get Varint (Base 128 Varints), _Tp = uint32_t , uint64_t
+	protected:
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value && std::is_unsigned<_Tp>::value> ::type >
+			bool get_varint(const uint8_t* &pd, int &len, _Tp &out) const  //get Varint (Base 128 Varints)
 		{
-			if (!std::is_arithmetic<_Tp>::value || len <= 0)
+			if (len <= 0)
 				return false;
 			int nbit = 0;
 			out = 0;
@@ -95,11 +98,11 @@ namespace ec
 			return false;
 		}
 
-		template<class _Tp, class _Out>
-		bool out_varint(_Tp v, _Out* pout) const //out Varint (Base 128 Varints), _Tp = uint32_t , uint64_t
+		template<class _Tp
+			, class _Out
+			, class = typename std::enable_if<std::is_integral<_Tp>::value && std::is_unsigned<_Tp>::value > ::type >
+			bool out_varint(_Tp v, _Out* pout) const //out Varint (Base 128 Varints)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return false;
 			int nbit = 0;
 			uint8_t out = 0;
 			do {
@@ -119,12 +122,12 @@ namespace ec
 			return true;
 		}
 
-		template<class _Tp>
-		bool get_fixed(const uint8_t* &pd, int &len, _Tp &out) const  //get 32-bit and 64-bit (fixed32,sfixed32,fixed64,sfixed64,float,double)
+	public:
+		template<class _Tp
+			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && (sizeof(_Tp) == 4u || sizeof(_Tp) == 8u)>::type >
+			bool get_fixed(const uint8_t* &pd, int &len, _Tp &out) const  //get 32-bit and 64-bit (fixed32,sfixed32,fixed64,sfixed64,float,double)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return false;
-			if (len < (int)sizeof(out) || (sizeof(out) != 4 && sizeof(out) != 8))
+			if (len < (int)sizeof(out))
 				return false;
 			memcpy(&out, pd, sizeof(out));
 			if (isbig()) {
@@ -138,11 +141,11 @@ namespace ec
 			return true;
 		}
 
-		template<class _Tp, class _Out>
-		bool out_fixed32(_Tp v, _Out * pout) const  //out 32-bit and 64-bit (fixed32,sfixed32,fixed64,sfixed64,float,double)
+		template<class _Tp
+			, class _Out
+			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 4u >::type>
+			bool out_fixed32(_Tp v, _Out * pout) const  //out 32-bit (fixed32,sfixed32,float)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return false;
 			if (isbig()) {
 				uint32_t uv = bswap_32(*((uint32_t*)&v));
 				try {
@@ -162,11 +165,11 @@ namespace ec
 			}
 		}
 
-		template<class _Tp, class _Out>
-		bool out_fixed64(_Tp v, _Out * pout) const  //out 32-bit and 64-bit (fixed32,sfixed32,fixed64,sfixed64,float,double)
+		template<class _Tp
+			, class _Out
+			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 8u>::type>
+			bool out_fixed64(_Tp v, _Out * pout) const  //out 64-bit (fixed64,sfixed64,double)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return false;
 			if (isbig()) {
 				uint64_t uv = bswap_64(*((uint64_t*)&v));
 				try {
@@ -317,8 +320,9 @@ namespace ec
 			}
 		}
 
-		template<class _Tp>
-		bool p_var(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false) const
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type>
+			bool p_var(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false) const
 		{
 			if (pb_varint != wire_type)
 				return false;
@@ -344,13 +348,15 @@ namespace ec
 			return pb_fixed64 == wire_type && 8u == sizeof(out) && get_fixed(pd, len, out);
 		}
 
-		template<class _Tp, class _Out>
-		bool out_var(_Out* po, int id, _Tp v, bool zigzag = false) const
+		template<class _Tp
+			, class _Out
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type>
+			bool out_var(_Out* po, int id, _Tp v, bool zigzag = false) const
 		{
-			using tpu = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
 			if (zigzag)
 				return out_key(id, pb_varint, po) && out_varint(t_zigzag<_Tp>().encode(v), po);
-			return out_key(id, pb_varint, po) && out_varint((tpu)v, po);
+			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+			return out_key(id, pb_varint, po) && out_varint((utype)v, po);
 		}
 
 		template<class _Out>
@@ -385,19 +391,25 @@ namespace ec
 			return out_key(id, pb_length_delimited, po) && out_varint(size, po);
 		}
 
-		template<class _Tp, class _Out>
-		bool out_fixed(_Out* po, int id, _Tp v) const
+		template<class _Tp
+			, class _Out
+			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 4u>::type >
+			bool out_fixed32(_Out* po, int id, _Tp v) const
 		{
-			if (4u == sizeof(v))
-				return out_key(id, pb_fixed32, po) && base_protobuf::out_fixed32(v, po);
-			if (8u == sizeof(v))
-				return out_key(id, pb_fixed64, po) && base_protobuf::out_fixed64(v, po);
-			return false;
+			return out_key(id, pb_fixed32, po) && base_protobuf::out_fixed32(v, po);
+		}
+
+		template<class _Tp
+			, class _Out
+			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 8u>::type >
+			bool out_fixed64(_Out* po, int id, _Tp v) const
+		{
+			return out_key(id, pb_fixed64, po) && base_protobuf::out_fixed64(v, po);
 		}
 
 	public: //sizeof
-		template<class _Tp>
-		size_t size_varint(_Tp v) const //size Varint (Base 128 Varints), _Tp = uint32_t , uint64_t
+		template<class _Tp, class = typename std::enable_if<std::is_integral<_Tp>::value && std::is_unsigned<_Tp>::value > ::type >
+		size_t size_varint(_Tp v) const //size Varint (Base 128 Varints)
 		{
 			int nbit = 0;
 			size_t zret = 0;
@@ -422,17 +434,19 @@ namespace ec
 			return len ? size_varint(len) + len : 0;
 		}
 
-		template<class _Tp>
-		size_t size_var(int id, _Tp v, bool zigzag = false) const
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
+			size_t size_var(int id, _Tp v, bool zigzag = false) const
 		{
-			using tpu = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
 			if (zigzag)
 				return size_key(id, pb_varint) + size_varint(t_zigzag<_Tp>().encode(v));
-			return size_key(id, pb_varint) + size_varint((tpu)v);
+			return size_key(id, pb_varint) + size_varint((utype)v);
 		}
 
-		template<class _Tp>
-		size_t size_fixed(uint32_t id, _Tp v) const
+		template<class _Tp
+			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && (sizeof(_Tp) == 4u || sizeof(_Tp) == 8u)>::type >
+			size_t size_fixed(uint32_t id, _Tp v) const
 		{
 			if (4 == (int)sizeof(v))
 				return size_key(id, 5) + 4;
@@ -559,13 +573,14 @@ namespace ec
 			return 0 == len;
 		}
 
-		template<class _Tp>
-		bool p_varpacket(const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false) const
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
+			bool p_varpacket(const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false) const
 		{
 			if (!std::is_arithmetic<_Tp>::value)
 				return false;
-			using tpu = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
-			tpu v;
+			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+			utype v;
 			if (!get_varint(pd, len, v))
 				return false;
 			if (zigzag)
@@ -575,11 +590,11 @@ namespace ec
 			return true;
 		}
 
-		template<class _Tp>
-		bool out_varpacket(uint32_t id, _Tp *pdata, size_t items, _Out* pout, bool zigzag = false)
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
+			bool out_varpacket(uint32_t id, _Tp *pdata, size_t items, _Out* pout, bool zigzag = false)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return false;
+			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
 			if (!items)
 				return true;
 			size_t zbody = size_varpacket(pdata, items, zigzag);
@@ -592,75 +607,92 @@ namespace ec
 						return false;
 				}
 				else {
-					if (!out_varint(pdata[i], pout))
+					if (!out_varint((utype)pdata[i], pout))
 						return false;
 				}
 			}
 			return true;
 		}
 
-		template<class _Tp>
-		size_t size_varpacket(_Tp *pdata, size_t items, bool zigzag = false)
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
+			size_t size_varpacket(_Tp *pdata, size_t items, bool zigzag = false)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return 0;
 			if (!items)
 				return 0;
 			size_t zn = 0;
 			for (auto i = 0u; i < items; i++) {
 				if (zigzag)
 					zn += size_varint(t_zigzag<_Tp>().encode(pdata[i]));
-				else
-					zn += size_varint(pdata[i]);
+				else {
+					using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+					zn += size_varint((utype)pdata[i]);
+				}
 			}
 			return zn;
 		}
 
-		template<class _Tp>
-		size_t size_varpacket(uint32_t id, _Tp *pdata, size_t items, bool zigzag = false)
+		template<class _Tp
+			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
+			size_t size_varpacket(uint32_t id, _Tp *pdata, size_t items, bool zigzag = false)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return 0;
 			if (!items)
 				return 0;
 			size_t zn = 0;
 			for (auto i = 0u; i < items; i++) {
 				if (zigzag)
 					zn += size_varint(t_zigzag<_Tp>().encode(pdata[i]));
-				else
-					zn += size_varint(pdata[i]);
+				else {
+					using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+					zn += size_varint((utype)pdata[i]);
+				}
 			}
 			return size_key(id, pb_length_delimited) + size_varint(zn) + zn;
 		}
 
-		template<class _Tp>
-		size_t size_fixpacket(uint32_t id, _Tp *pdata, size_t items)
+		template<class _Tp,
+			class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 4u>::type >
+			size_t size_fix32packet(uint32_t id, _Tp *pdata, size_t items)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return 0;
 			if (!items)
 				return 0;
 			return size_key(id, pb_length_delimited) + size_varint(sizeof(_Tp) * items) + sizeof(_Tp) * items;
 		}
 
-		template<class _Tp>
-		bool out_fixpacket(uint32_t id, _Tp *pdata, size_t items, _Out* pout)
+		template<class _Tp,
+			class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 4u>::type>
+			bool out_fix32packet(uint32_t id, _Tp *pdata, size_t items, _Out* pout)
 		{
-			if (!std::is_arithmetic<_Tp>::value)
-				return false;
 			if (!items)
 				return true;
-			if (sizeof(_Tp) != 4 && sizeof(_Tp) != 8)
-				return false;
 			size_t zbody = sizeof(_Tp) * items;
 			out_key(id, pb_length_delimited, pout);
 			out_varint(zbody, pout);
-			for (auto i = 0u; i < items; i++) {
-				if (sizeof(_Tp) == 4)
-					base_protobuf::out_fixed32(pdata[i], pout);
-				else
-					base_protobuf::out_fixed64(pdata[i], pout);
-			}
+			for (auto i = 0u; i < items; i++)
+				base_protobuf::out_fixed32(pdata[i], pout);
+			return true;
+		}
+
+		template<class _Tp,
+			class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 8u>::type >
+			size_t size_fix64packet(uint32_t id, _Tp *pdata, size_t items)
+		{
+			if (!items)
+				return 0;
+			return size_key(id, pb_length_delimited) + size_varint(sizeof(_Tp) * items) + sizeof(_Tp) * items;
+		}
+
+		template<class _Tp,
+			class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 8u>::type>
+			bool out_fix64packet(uint32_t id, _Tp *pdata, size_t items, _Out* pout)
+		{
+			if (!items)
+				return true;
+			size_t zbody = sizeof(_Tp) * items;
+			out_key(id, pb_length_delimited, pout);
+			out_varint(zbody, pout);
+			for (auto i = 0u; i < items; i++)
+				base_protobuf::out_fixed64(pdata[i], pout);
 			return true;
 		}
 

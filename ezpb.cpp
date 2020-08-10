@@ -1,10 +1,10 @@
 ﻿/*!
-\file ezpb.cpp 
+\file ezpb.cpp
 test ec_protobuf with C++ 11
 
 \author	jiangyong
 \email  kipway@outlook.com
-\date   2020.8.7
+\date   2020.8.10
 */
 
 #ifdef _WIN32
@@ -35,7 +35,7 @@ message msg_pkg{
 	uint32 order = 1; //命令,必有
 	uint32 seqno = 2; //request/response配对序列号，可选，如果请求时带有此字段，则应答时需要原样返回。
 	string srcid = 3; //源id
-	string destid =4; //目的id, 
+	string destid =4; //目的id,
 	// order,seqno,srcid,destid 为消息头
 
 	bytes data = 5;   //消息体，可选，根据前面的order不同解析不同。
@@ -146,14 +146,22 @@ public:
 		id_pswd,
 		id_retcode = 14,
 		id_retmsg,
-		id_datas
+		id_vints,
+		id_vfloats,
+		id_vdoubles,
+		id_float,
+		id_double
 	};
 public:
 	std::string _name;
 	std::string _pswd;
 	int32_t _retcode;
 	std::string _retmsg;
-	std::vector<int32_t> _datas;
+	std::vector<int32_t> _vints;
+	std::vector<float> _vfloats;
+	std::vector<double> _vdoubles;
+	float _f32;
+	double _f64;
 public:
 	virtual void reset()
 	{
@@ -161,7 +169,9 @@ public:
 		_pswd.clear();
 		_retcode = 0u;
 		_retmsg.clear();
-		_datas.clear();
+		_vints.clear();
+		_vfloats.clear();
+		_vdoubles.clear();
 	}
 
 	void tst_prt()
@@ -170,25 +180,49 @@ public:
 		std::printf("pswd   : %s\n", _pswd.c_str());
 		std::printf("retcode: %d\n", _retcode);
 		std::printf("retmsg : %s\n", _retmsg.c_str());
-		std::printf("datas:\n");
-		for (auto &i : _datas)
+		std::printf("vints:\n");
+		for (auto &i : _vints)
 			std::printf("%d ", i);
 		printf("\n");
+
+		for (auto &i : _vfloats)
+			std::printf("%G ", i);
+		printf("\n");
+
+		for (auto &i : _vdoubles)
+			std::printf("%G ", i);
+		printf("\n");
+
+		printf("f32= %G\n", _f32);
+		printf("f64= %G\n", _f64);
 	}
 protected:
 	virtual size_t size_content()
 	{
-		return size_str(id_name, _name.data(), _name.size()) + size_str(id_pswd, _pswd.data(), _pswd.size())
+		printf("size_fix32packet = %zu \n ", size_fix32packet(id_vfloats, _vfloats.data(), _vfloats.size()));
+		printf("size_fix64packet = %zu \n ", size_fix64packet(id_vdoubles, _vdoubles.data(), _vdoubles.size()));
+		return size_str(id_name, _name.data(), _name.size())
+			+ size_str(id_pswd, _pswd.data(), _pswd.size())
 			+ size_var(id_retcode, _retcode, true) // user zigzag encode
 			+ size_str(id_retmsg, _retmsg.data(), _retmsg.size())
-			+ size_varpacket(id_datas, _datas.data(), _datas.size());
+			+ size_varpacket(id_vints, _vints.data(), _vints.size())
+			+ size_fix32packet(id_vfloats, _vfloats.data(), _vfloats.size())
+			+ size_fix64packet(id_vdoubles, _vdoubles.data(), _vdoubles.size())
+			+ size_fixed(id_float, _f32)
+			+ size_fixed(id_double, _f64)
+			;
 	}
 	virtual bool out_content(bytes* pout)
 	{
 		return out_str(pout, id_name, _name.data(), _name.size()) && out_str(pout, id_pswd, _pswd.data(), _pswd.size())
 			&& out_var(pout, id_retcode, _retcode, true) // user zigzag encode
 			&& out_str(pout, id_retmsg, _retmsg.data(), _retmsg.size())
-			&& out_varpacket(id_datas, _datas.data(), _datas.size(), pout);
+			&& out_varpacket(id_vints, _vints.data(), _vints.size(), pout)
+			&& out_fix32packet(id_vfloats, _vfloats.data(), _vfloats.size(), pout)
+			&& out_fix64packet(id_vdoubles, _vdoubles.data(), _vdoubles.size(), pout)
+			&& out_fixed32(pout, id_float, _f32)
+			&& out_fixed64(pout, id_double, _f64)
+			;
 	}
 	virtual bool on_cls(uint32_t field_number, const void* pdata, size_t sizedata)
 	{
@@ -203,14 +237,34 @@ protected:
 		case id_retmsg:
 			_retmsg.assign((const char*)pdata, sizedata);
 			break;
-		case id_datas: // packed = true
-			_datas.clear();
+		case id_vints: // packed = true
+			_vints.clear();
 			{
 				const uint8_t* pd = (const uint8_t*)pdata;
 				int len = (int)sizedata;
 				int32_t nv;
-				while (p_varpacket(pd, len, nv))
-					_datas.push_back(nv);
+				while (len > 0 && p_varpacket(pd, len, nv))
+					_vints.push_back(nv);
+			}
+			break;
+		case id_vfloats: // packed = true
+			_vfloats.clear();
+			{
+				const uint8_t* pd = (const uint8_t*)pdata;
+				int len = (int)sizedata;
+				float v;
+				while (len > 0 && get_fixed(pd, len, v))
+					_vfloats.push_back(v);
+			}
+			break;
+		case id_vdoubles: // packed = true
+			_vdoubles.clear();
+			{
+				const uint8_t* pd = (const uint8_t*)pdata;
+				int len = (int)sizedata;
+				double v;
+				while (len > 0 && get_fixed(pd, len, v))
+					_vdoubles.push_back(v);
 			}
 			break;
 		}
@@ -223,10 +277,28 @@ protected:
 		case id_retcode:
 			_retcode = static_cast<int>(ec::base_protobuf::t_zigzag<uint64_t>().decode(val));
 			break;
-		case id_datas: // packed = false
-			_datas.push_back((int32_t)val);
+		case id_vints: // packed = false
+			_vints.push_back((int32_t)val);
 			break;
 		}
+		return true;
+	}
+	virtual bool on_fix32(uint32_t field_number, const void* pval)  // packed = false
+	{
+		if (id_vfloats == field_number) {
+			_vfloats.push_back(*(float*)pval);
+		}
+		else if (id_float == field_number)
+			_f32 = *(float*)pval;
+		return true;
+	}
+	virtual bool on_fix64(uint32_t field_number, const void* pval)  // packed = false
+	{
+		if (id_vdoubles == field_number) {
+			_vdoubles.push_back(*(double*)pval);
+		}
+		else if (id_double == field_number)
+			_f64 = *(double*)pval;
 		return true;
 	}
 };
@@ -248,8 +320,15 @@ int main()
 	pkgin._body._retcode = -5;
 	pkgin._body._retmsg = "login ret message";
 	for (auto i = 100; i < 110; i++)
-		pkgin._body._datas.push_back(i);
+		pkgin._body._vints.push_back(i);
 
+	for (auto i = 10; i < 21; i++)
+		pkgin._body._vfloats.push_back((float)(i + 0.1));
+
+	for (auto i = 20; i < 31; i++)
+		pkgin._body._vdoubles.push_back((double)(i + 0.2));
+	pkgin._body._f32 = 12.5;
+	pkgin._body._f64 = 125.5;
 	std::printf("print pkgin:\n");
 	pkgin.tst_prt();
 
