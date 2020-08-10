@@ -38,7 +38,7 @@ message msg_pkg{
 	string destid =4; //目的id,
 	// order,seqno,srcid,destid 为消息头
 
-	bytes data = 5;   //消息体，可选，根据前面的order不同解析不同。
+	bytes body = 5;   //消息体，可选，根据前面的order不同解析不同。嵌入message测试
 }
 */
 
@@ -63,7 +63,7 @@ public:
 	uint32_t	_seqno;
 	std::string _srcid;
 	std::string _destid;
-	value_type	_body;  //消息体
+	value_type	_body;  //消息体,嵌入message测试
 
 public:
 	virtual void reset()
@@ -129,9 +129,13 @@ syntax = "proto3";
 message body_login{ //登录和返回数据
 	string name = 1; //登录名
 	string pswd =2;  //登录密码
-	sint32 retcode = 14; //返回代码，0表示成功，返回时有
+	sint32 retcode = 14; //zigzag测试，返回代码，0表示成功，返回时有
 	string retmsg = 15; //返回信息，可选，retcode != 0时，填写错误信息。
-	repeated int32 data = 16 [packed = true]; //测试紧凑数组
+	repeated int32 vints = 16 [packed = true]; //测试紧凑int数组
+	repeated float vfloats = 17 [packed = true]; //测试紧float凑数组
+	repeated double vdoubles = 18 [packed = true]; //测试紧凑double数组
+	float   f32 = 19; //测试单个float , fix32编码
+	double  f64 = 20; //测试单个double , fix64编码
 }
 */
 
@@ -172,6 +176,8 @@ public:
 		_vints.clear();
 		_vfloats.clear();
 		_vdoubles.clear();
+		_f32 = 0;
+		_f64 = 0;
 	}
 
 	void tst_prt()
@@ -277,26 +283,25 @@ protected:
 		case id_retcode:
 			_retcode = static_cast<int>(ec::base_protobuf::t_zigzag<uint64_t>().decode(val));
 			break;
-		case id_vints: // packed = false
+		case id_vints: // 兼容packed = false
 			_vints.push_back((int32_t)val);
 			break;
 		}
 		return true;
 	}
-	virtual bool on_fix32(uint32_t field_number, const void* pval)  // packed = false
+	virtual bool on_fix32(uint32_t field_number, const void* pval)
 	{
-		if (id_vfloats == field_number) {
+		if (id_vfloats == field_number) // 兼容packed = false
 			_vfloats.push_back(*(float*)pval);
-		}
+
 		else if (id_float == field_number)
 			_f32 = *(float*)pval;
 		return true;
 	}
-	virtual bool on_fix64(uint32_t field_number, const void* pval)  // packed = false
+	virtual bool on_fix64(uint32_t field_number, const void* pval)
 	{
-		if (id_vdoubles == field_number) {
+		if (id_vdoubles == field_number) // 兼容packed = false
 			_vdoubles.push_back(*(double*)pval);
-		}
 		else if (id_double == field_number)
 			_f64 = *(double*)pval;
 		return true;
