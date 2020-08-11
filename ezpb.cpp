@@ -4,7 +4,7 @@ test ec_protobuf with C++ 11
 
 \author	jiangyong
 \email  kipway@outlook.com
-\date   2020.8.10
+\date   2020.8.11
 */
 
 #ifdef _WIN32
@@ -189,24 +189,22 @@ public:
 		std::printf("vints:\n");
 		for (auto &i : _vints)
 			std::printf("%d ", i);
-		printf("\n");
+		std::printf("\n");
 
 		for (auto &i : _vfloats)
 			std::printf("%G ", i);
-		printf("\n");
+		std::printf("\n");
 
 		for (auto &i : _vdoubles)
 			std::printf("%G ", i);
-		printf("\n");
+		std::printf("\n");
 
-		printf("f32= %G\n", _f32);
-		printf("f64= %G\n", _f64);
+		std::printf("f32= %G\n", _f32);
+		std::printf("f64= %G\n", _f64);
 	}
 protected:
 	virtual size_t size_content()
-	{
-		printf("size_fix32packet = %zu \n ", size_fix32packet(id_vfloats, _vfloats.data(), _vfloats.size()));
-		printf("size_fix64packet = %zu \n ", size_fix64packet(id_vdoubles, _vdoubles.data(), _vdoubles.size()));
+	{		
 		return size_str(id_name, _name.data(), _name.size())
 			+ size_str(id_pswd, _pswd.data(), _pswd.size())
 			+ size_var(id_retcode, _retcode, true) // user zigzag encode
