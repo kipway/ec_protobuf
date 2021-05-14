@@ -2,11 +2,11 @@
 \file ec_protobuf.h
 \author	jiangyong
 \email  kipway@outlook.com
-\update 2020.11.17
+\update 2021.5.6
 
 classes to encode/decode google protocol buffer,support proto3
 
-eclib 3.0 Copyright (c) 2017-2020, kipway
+eclib 3.0 Copyright (c) 2017-2021, kipway
 source repository : https://github.com/kipway
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,6 +18,7 @@ You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2
 #include <stdint.h>
 #include <memory.h>
 #include <string>
+#include <vector>
 #ifdef _MSC_VER
 #ifndef bswap_16
 #	define bswap_16(x) _byteswap_ushort(x)
@@ -38,6 +39,14 @@ You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2
 #define pb_start_group  3 // deprecated not support
 #define pb_end_group  4   //deprecated not support
 #define pb_fixed32 5  // 32-bit
+
+#define pberr_sucess 0
+#define pberr_ok 0
+#define pberr_encode 1
+#define pberr_decode 2
+#define pberr_str_non_utf8 3
+#define pberr_memory  4
+
 namespace ec
 {
 	/*!
@@ -46,6 +55,8 @@ namespace ec
 	*/
 	class base_protobuf //base class for encode and decode protobuf
 	{
+	protected:
+		int _lasterr;
 	public:
 		inline bool isbig() const
 		{
@@ -55,6 +66,46 @@ namespace ec
 			} ua;
 			ua.u32 = 0x01020304;
 			return ua.u8 == 0x01;
+		}
+
+		inline int getlasterr()
+		{
+			return _lasterr;
+		}
+
+		bool isutf8(const char* s, size_t size = 0) const // return true if s is utf8
+		{
+			uint8_t c;
+			int nb = 0;
+			const char* pend = s + (size ? size : strlen(s));
+			while (s < pend) {
+				c = *s++;
+				if (!nb) {
+					if (!(c & 0x80))
+						continue;
+					if (c >= 0xFC && c <= 0xFD)
+						nb = 5;
+					else if (c >= 0xF8)
+						nb = 4;
+					else if (c >= 0xF0)
+						nb = 3;
+					else if (c >= 0xE0)
+						nb = 2;
+					//else if (c >= 0xC0) // GBK -> UTF8  > 2bytes
+					//	nb = 1;
+					else
+						return false;
+					continue;
+				}
+				if ((c & 0xC0) != 0x80)
+					return false;
+				nb--;
+			}
+			return !nb;
+		}
+
+		base_protobuf() : _lasterr(0)
+		{
 		}
 
 		template<class _Tp
@@ -74,7 +125,7 @@ namespace ec
 	protected:
 		template<class _Tp
 			, class = typename std::enable_if<std::is_integral<_Tp>::value && std::is_unsigned<_Tp>::value> ::type >
-			bool get_varint(const uint8_t* &pd, int &len, _Tp &out) const  //get Varint (Base 128 Varints)
+			bool get_varint(const uint8_t* &pd, int &len, _Tp &out)  //get Varint (Base 128 Varints)
 		{
 			if (len <= 0)
 				return false;
@@ -91,13 +142,14 @@ namespace ec
 				pd++;
 				len--;
 			} while (len > 0 && nbit < ((int)sizeof(_Tp) * 8));
+			_lasterr = pberr_decode;
 			return false;
 		}
 
 		template<class _Tp
 			, class _Out
 			, class = typename std::enable_if<std::is_integral<_Tp>::value && std::is_unsigned<_Tp>::value > ::type >
-			bool out_varint(_Tp v, _Out* pout) const //out Varint (Base 128 Varints)
+			bool out_varint(_Tp v, _Out* pout) //out Varint (Base 128 Varints)
 		{
 			int nbit = 0;
 			uint8_t out = 0;
@@ -113,8 +165,15 @@ namespace ec
 					break;
 				}
 			} while (nbit + 7 < ((int)sizeof(_Tp) * 8));
-			if (v >> nbit)
-				pout->push_back((uint8_t)(v >> nbit));
+			if (v >> nbit) {
+				try {
+					pout->push_back((uint8_t)(v >> nbit));
+				}
+				catch (...) {
+					_lasterr = pberr_memory;
+					return false;
+				}
+			}
 			return true;
 		}
 
@@ -140,15 +199,16 @@ namespace ec
 		template<class _Tp
 			, class _Out
 			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 4u >::type>
-			bool out_fixed32(_Tp v, _Out * pout) const  //out 32-bit (fixed32,sfixed32,float)
+			bool out_fixed32(_Tp v, _Out * pout)  //out 32-bit (fixed32,sfixed32,float)
 		{
 			if (isbig()) {
-				uint32_t uv = bswap_32(*((uint32_t*)&v));
+				uint32_t uv; memcpy(&uv, &v, 4); uv = bswap_32(uv);
 				try {
 					pout->append((uint8_t*)&uv, sizeof(uv));
 					return true;
 				}
 				catch (...) {
+					_lasterr = pberr_memory;
 					return false;
 				}
 			}
@@ -157,6 +217,7 @@ namespace ec
 				return true;
 			}
 			catch (...) {
+				_lasterr = pberr_memory;
 				return false;
 			}
 		}
@@ -164,15 +225,16 @@ namespace ec
 		template<class _Tp
 			, class _Out
 			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 8u>::type>
-			bool out_fixed64(_Tp v, _Out * pout) const  //out 64-bit (fixed64,sfixed64,double)
+			bool out_fixed64(_Tp v, _Out * pout)  //out 64-bit (fixed64,sfixed64,double)
 		{
 			if (isbig()) {
-				uint64_t uv = bswap_64(*((uint64_t*)&v));
+				uint64_t uv; memcpy(&uv, &v, 8); uv = bswap_64(uv);
 				try {
 					pout->append((uint8_t*)&uv, sizeof(uv));
 					return true;
 				}
 				catch (...) {
+					_lasterr = pberr_memory;
 					return false;
 				}
 			}
@@ -181,11 +243,12 @@ namespace ec
 				return true;
 			}
 			catch (...) {
+				_lasterr = pberr_memory;
 				return false;
 			}
 		}
 
-		bool get_key(const uint8_t* &pd, int &len, uint32_t &field_number, uint32_t &wire_type) const //get field_number and  wire_type
+		bool get_key(const uint8_t* &pd, int &len, uint32_t &field_number, uint32_t &wire_type) //get field_number and  wire_type
 		{
 			uint32_t key;
 			if (!get_varint(pd, len, key))
@@ -195,13 +258,15 @@ namespace ec
 			return true;
 		}
 
-		bool get_length_delimited(const uint8_t* &pd, int &len, const uint8_t* &pout, size_t &outlen) const //get string, bytes,no copy
+		bool get_length_delimited(const uint8_t* &pd, int &len, const uint8_t* &pout, size_t &outlen)  //get string, bytes,no copy
 		{
 			uint32_t ul = 0;
 			if (!get_varint(pd, len, ul))
 				return false;
-			if (len < (int)ul)
+			if (len < (int)ul) {
+				_lasterr = pberr_decode;
 				return false;
+			}
 			pout = pd;
 			pd += ul;
 			len -= ul;
@@ -209,7 +274,7 @@ namespace ec
 			return true;
 		}
 
-		bool jump_over(const uint8_t* &pd, int &len, uint32_t wire_type) const //jump over unkown field_number
+		bool jump_over(const uint8_t* &pd, int &len, uint32_t wire_type) //jump over unkown field_number
 		{
 			size_t datalen = 0;
 			uint64_t v = 0;
@@ -238,13 +303,14 @@ namespace ec
 				len -= 4;
 				break;
 			default:
+				_lasterr = pberr_decode;
 				return false;// unkown wire_type
 			}
 			return true;
 		}
 
 		template<class _Out>
-		bool out_length_delimited(const uint8_t* pd, size_t len, _Out* pout) const // out string, bytes
+		bool out_length_delimited(const uint8_t* pd, size_t len, _Out* pout) // out string, bytes
 		{
 			if (!out_varint(len, pout))
 				return false;
@@ -253,12 +319,13 @@ namespace ec
 				return true;
 			}
 			catch (...) {
+				_lasterr = pberr_memory;
 				return false;
 			}
 		}
 
 		template<class _Out>
-		bool out_key(uint32_t field_number, uint32_t wire_type, _Out* pout) const // out field_number and  wire_type
+		bool out_key(uint32_t field_number, uint32_t wire_type, _Out* pout) // out field_number and  wire_type
 		{
 			uint32_t v = (field_number << 3) | (wire_type & 0x07);
 			return out_varint(v, pout);
@@ -272,7 +339,7 @@ namespace ec
 		{
 		}
 
-		bool p_bytes(uint32_t wire_type, const uint8_t* &pd, int &len, void* pout, size_t &outlen) const
+		bool p_bytes(uint32_t wire_type, const uint8_t* &pd, int &len, void* pout, size_t &outlen)
 		{
 			size_t tmpsize = 0;
 			const uint8_t* ptmp = nullptr;
@@ -283,7 +350,7 @@ namespace ec
 			return tmpsize <= outlen;
 		}
 
-		bool p_str(uint32_t wire_type, const uint8_t* &pd, int &len, char* pout, size_t outlen) const
+		bool p_str(uint32_t wire_type, const uint8_t* &pd, int &len, char* pout, size_t outlen)
 		{
 			size_t tmpsize = 0;
 			const uint8_t* ptmp = nullptr;
@@ -292,16 +359,20 @@ namespace ec
 			size_t zlen = tmpsize < outlen ? tmpsize : outlen - 1u;
 			memcpy(pout, ptmp, zlen);
 			pout[zlen] = 0;
+			if (!isutf8(pout, zlen)) {
+				_lasterr = pberr_str_non_utf8;
+				return false;
+			}
 			return tmpsize < outlen;
 		}
 
-		inline bool p_cls(uint32_t wire_type, const uint8_t* &pd, int &len, const uint8_t* &p, size_t &size) const  // no copy
+		inline bool p_cls(uint32_t wire_type, const uint8_t* &pd, int &len, const uint8_t* &p, size_t &size)  // no copy
 		{
 			return (pb_length_delimited == wire_type && get_length_delimited(pd, len, p, size));
 		}
 
 		template< class _Out>
-		bool p_cls(uint32_t wire_type, const uint8_t* &pd, int &len, _Out* pout) const
+		bool p_cls(uint32_t wire_type, const uint8_t* &pd, int &len, _Out* pout)
 		{
 			size_t tmpsize = 0;
 			const uint8_t* ptmp = nullptr;
@@ -312,13 +383,14 @@ namespace ec
 				return true;
 			}
 			catch (...) {
+				_lasterr = pberr_memory;
 				return false;
 			}
 		}
 
 		template<class _Tp
 			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type>
-			bool p_var(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false) const
+			bool p_var(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false)
 		{
 			if (pb_varint != wire_type)
 				return false;
@@ -333,13 +405,13 @@ namespace ec
 		}
 
 		template<class _Tp>
-		inline bool p_fixed32(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out) const
+		inline bool p_fixed32(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out)
 		{
 			return pb_fixed32 == wire_type && 4u == sizeof(out) && get_fixed(pd, len, out);
 		}
 
 		template<class _Tp>
-		inline bool p_fixed64(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out) const
+		inline bool p_fixed64(uint32_t wire_type, const uint8_t* &pd, int &len, _Tp &out)
 		{
 			return pb_fixed64 == wire_type && 8u == sizeof(out) && get_fixed(pd, len, out);
 		}
@@ -347,8 +419,10 @@ namespace ec
 		template<class _Tp
 			, class _Out
 			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type>
-			bool out_var(_Out* po, int id, _Tp v, bool zigzag = false) const
+			bool out_var(_Out* po, int id, _Tp v, bool zigzag = false)
 		{
+			if (!v) //default 0
+				return true;
 			if (zigzag)
 				return out_key(id, pb_varint, po) && out_varint(t_zigzag<_Tp>().encode(v), po);
 			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
@@ -356,23 +430,31 @@ namespace ec
 		}
 
 		template<class _Out>
-		bool out_str(_Out* po, int id, const char* s) const
+		bool out_str(_Out* po, int id, const char* s)
 		{
 			if (!s || !*s)
 				return true;
+			if (!isutf8(s)) {
+				_lasterr = pberr_str_non_utf8;
+				return false;
+			}
 			return out_key(id, pb_length_delimited, po) && out_length_delimited((uint8_t*)s, strlen(s), po);
 		}
 
 		template<class _Out>
-		bool out_str(_Out* po, int id, const char* s, size_t size) const
+		bool out_str(_Out* po, int id, const char* s, size_t size)
 		{
 			if (!s || !*s || !size)
 				return true;
+			if (!isutf8(s, size)) {
+				_lasterr = pberr_str_non_utf8;
+				return false;
+			}
 			return out_key(id, pb_length_delimited, po) && out_length_delimited((uint8_t*)s, size, po);
 		}
 
 		template<class _Out>
-		bool out_cls(_Out* po, int id, const void* pcls, size_t size) const
+		bool out_cls(_Out* po, int id, const void* pcls, size_t size)
 		{
 			if (!pcls || !size)
 				return true;
@@ -380,7 +462,7 @@ namespace ec
 		}
 
 		template<class _Out>
-		bool out_cls_head(_Out* po, int id, size_t size) const
+		bool out_cls_head(_Out* po, int id, size_t size)
 		{
 			if (!size)
 				return true;
@@ -390,7 +472,7 @@ namespace ec
 		template<class _Tp
 			, class _Out
 			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 4u>::type >
-			inline bool out_fixed32(_Out* po, int id, _Tp v) const
+			inline bool out_fixed32(_Out* po, int id, _Tp v)
 		{
 			return out_key(id, pb_fixed32, po) && base_protobuf::out_fixed32(v, po);
 		}
@@ -398,7 +480,7 @@ namespace ec
 		template<class _Tp
 			, class _Out
 			, class = typename std::enable_if<std::is_arithmetic<_Tp>::value && sizeof(_Tp) == 8u>::type >
-			inline bool out_fixed64(_Out* po, int id, _Tp v) const
+			inline bool out_fixed64(_Out* po, int id, _Tp v)
 		{
 			return out_key(id, pb_fixed64, po) && base_protobuf::out_fixed64(v, po);
 		}
@@ -435,6 +517,8 @@ namespace ec
 			size_t size_var(int id, _Tp v, bool zigzag = false) const
 		{
 			using utype = typename std::conditional < sizeof(_Tp) < 8u, uint32_t, uint64_t > ::type;
+			if (!v)
+				return 0; //default 0
 			if (zigzag)
 				return size_key(id, pb_varint) + size_varint(t_zigzag<_Tp>().encode(v));
 			return size_key(id, pb_varint) + size_varint((utype)v);
@@ -501,6 +585,30 @@ namespace ec
 			return zc;
 		}
 
+		const char* getlasterrstr()
+		{
+			const char* sret = nullptr;
+			switch (_lasterr) {
+			case pberr_ok:
+				sret = "";
+				break;
+			case pberr_encode:
+				sret = "encode failed";
+				break;
+
+			case pberr_decode:
+				sret = "decode failed";
+				break;
+			case pberr_str_non_utf8:
+				sret = "string is not utf8 encode";
+				break;
+			case pberr_memory:
+				sret = "memory error";
+				break;
+			}
+			return sret;
+		}
+
 		size_t size(uint32_t uid)
 		{
 			size_t sizebody = size_content();
@@ -511,6 +619,7 @@ namespace ec
 
 		bool serialize(uint32_t id, _Out* pout)
 		{
+			_lasterr = pberr_ok;
 			size_t sizebody = size_content();
 			if (!sizebody)
 				return true;
@@ -523,13 +632,44 @@ namespace ec
 			return size_content();
 		}
 
+		template<class _OBJ>
+		size_t size_obj_array(int objid, std::vector<_OBJ> &vs)
+		{
+			size_t zu = 0;
+			for (auto &i : vs) {
+				zu += i.size(objid);
+			}
+			return zu;
+		}
+
+		template<class _OBJ>
+		bool out_obj_array(_Out * pout, int objid, std::vector<_OBJ> &vs)
+		{
+			for (auto &i : vs) {
+				if (!i.serialize(objid, pout))
+					return false;
+			}
+			return true;
+		}
+
+		template<class _OBJ>
+		bool parse_obj_array(const void* pdata, size_t sizedata, std::vector<_OBJ> &vs) {
+			_OBJ t;
+			bool bret = t.parse(pdata, sizedata);
+			if (bret)
+				vs.push_back(std::move(t));
+			return bret;
+		}
+
 		inline bool serialize(_Out* pout)
 		{
+			_lasterr = pberr_ok;
 			return out_content(pout);
 		}
 
 		bool parse(const void* pmsg, size_t msgsize) // pasre content
 		{
+			_lasterr = pberr_ok;
 			reset();
 			if (!pmsg || !msgsize)
 				return true;
@@ -571,7 +711,7 @@ namespace ec
 
 		template<class _Tp
 			, class = typename std::enable_if<std::is_integral<_Tp>::value>::type >
-			bool p_varpacket(const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false) const
+			bool p_varpacket(const uint8_t* &pd, int &len, _Tp &out, bool zigzag = false)
 		{
 			if (!std::is_arithmetic<_Tp>::value)
 				return false;
@@ -692,6 +832,22 @@ namespace ec
 			return true;
 		}
 
+		template<class _Str = std::string>
+		bool cls2str(const void *pd, size_t size, _Str &s)
+		{
+			if (!isutf8((const char*)pd, size)) {
+				_lasterr = pberr_str_non_utf8;
+				return false;
+			}
+			try {
+				s.assign((const char*)pd, size);
+			}
+			catch (...) {
+				_lasterr = pberr_memory;
+				return false;
+			}
+			return true;
+		}
 	public:
 		virtual void reset() = 0;
 	protected:
